@@ -1,3 +1,4 @@
+import argparse
 import itertools
 import os
 import time
@@ -19,6 +20,8 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
+
+from sqlalchemy import create_engine
 
 
 class GrAuctionsScraper:
@@ -312,9 +315,9 @@ class SingleListingParsing:
 def send_email(attachment,
                to_date,
                auction_params_dict: dict,
+               sender_password: str,
                sender_email="test.mail.data.scrp2024@gmail.com",
-               sender_password="cjbo nywb zhaa gywm",
-               recipient_email="janpitonak.jp@gmail.com") -> None:
+               recipient_email="test@gmail.com") -> None:
     msg = MIMEMultipart()
     msg['From'] = sender_email
     msg['To'] = recipient_email.strip()
@@ -351,19 +354,6 @@ def send_email(attachment,
     part1.add_header('Content-Disposition', 'attachment', filename=f"eauctions_gr_{to_date}.xlsx")
     msg.attach(part1)
 
-    #
-    # part2 = MIMEApplication(attachment_arctos)
-    # part2.add_header('Content-Disposition', 'attachment', filename=f"arctos_auctions_{to_date}.xlsx")
-    # msg.attach(part2)
-    #
-    # part3 = MIMEApplication(attachment_frame)
-    # part3.add_header('Content-Disposition', 'attachment', filename=f"frame_auctions_{to_date}.xlsx")
-    # msg.attach(part3)
-    #
-    # part4 = MIMEApplication(attachment_manual_check)
-    # part4.add_header('Content-Disposition', 'attachment', filename=f"to_manual_check_{to_date}.xlsx")
-    # msg.attach(part4)
-
     smtp_server = "smtp.gmail.com"
     smtp_port = 587
     server = smtplib.SMTP(smtp_server, smtp_port)
@@ -374,6 +364,18 @@ def send_email(attachment,
     server.sendmail(sender_email, recipient_email, msg.as_string())
 
     server.quit()
+
+
+def get_table_from_sql_db(table_name, db: str, pswrd: str, username: str, server: str):
+    print("Connecting to DB...")
+
+    connect = f"mysql+pymysql://{username}:{pswrd}@{server}/{db}"
+    print(connect)
+    engine = create_engine(connect)
+
+    gr_df = pd.read_sql_table(table_name=table_name, con=engine)
+
+    return gr_df
 
 
 def get_our_debtors(listings_df: pd.DataFrame, debtos_df: pd.DataFrame, listing_vat_column: str,
@@ -461,71 +463,72 @@ def write_multiple_sheet_excel(buffer: io.BytesIO,
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--password", "-p", type=str, required=True)
+    parser.add_argument("--database", "-db", type=str, required=True)
+    parser.add_argument("--username", "-u", type=str, required=True)
+    parser.add_argument("--server", "-s", type=str, required=True)
+
+    parser.add_argument("--borrowers_table_1", "-b1", type=str, required=True)
+    parser.add_argument("--borrowers_table_2", "-b2", type=str, required=True)
+
+    parser.add_argument("--mailing_list", "-ml", type=str, required=True)
+
+    parser.add_argument("--max_page", "-max", type=int, required=False, default=None)
+
+    parser.add_argument("--sender_password", "-sp", type=str, required=True)
+
+    args = parser.parse_args()
+
+
+    borrowers_1_df = get_table_from_sql_db(table_name=args.borrowers_table_1, db=args.database,
+                                           username=args.username, pswrd=args.password, server=args.server)
+
+    borrowers_2_df = get_table_from_sql_db(table_name=args.borrowers_table_2, db=args.database,
+                                           username=args.username, pswrd=args.password, server=args.server)
+
+    mailing_list = get_table_from_sql_db(table_name=args.mailing_list, db=args.database,
+                                           username=args.username, pswrd=args.password, server=args.server)
+
+    emails_list = mailing_list["email"].to_list()
     from_date, to_date = get_dates()
 
     print(f"from date: {from_date}\nto date: {to_date}")
-    scraper = GrAuctionsScraper(from_date=from_date, to_date=to_date, max_page=None)
+    scraper = GrAuctionsScraper(from_date=from_date, to_date=to_date, max_page=args.max_page)
     df = scraper()
     print(f"no of listings: {df.shape[0]}")
-    # df.to_excel(f"gr_auctions_{to_date}.xlsx", index=False)
 
     single_parser = SingleListingParsing(df)
     single_listings_df = single_parser()
-    # single_listings_df.to_excel(f"all_listings_{to_date}.xlsx", index=False)
-    # single_listings_df[single_listings_df["debtor_name"] == "please check manually"].to_excel(f"to_manual_check_{to_date}.xlsx", index=False)
 
-    # single_listings_df = pd.to_excel(f"all_listings_{date.today()}.xlsx")
+    borrowers_1_auctions = get_our_debtors(single_listings_df, borrowers_1_df, listing_vat_column="debtor_vat",
+                                           debors_vat_column="VAT Number")
 
-    frame_df = pd.read_excel("FRAME Borrowers.xlsx")
-    frame_auctions = get_our_debtors(single_listings_df, frame_df, listing_vat_column="debtor_vat",
-                                     debors_vat_column="VAT Number")
-    # frame_auctions.to_excel(f"frame_auctions_{to_date}.xlsx", index=False)
-
-    arctos_df = pd.read_excel("ARCTOS Borrowers.xlsx")
-    arctos_auctions = get_our_debtors(single_listings_df, arctos_df, listing_vat_column="debtor_vat",
-                                      debors_vat_column="VAT Number")
+    borrowers_2_auctions = get_our_debtors(single_listings_df, borrowers_2_df, listing_vat_column="debtor_vat",
+                                           debors_vat_column="VAT Number")
 
     buffer = io.BytesIO()
 
     write_multiple_sheet_excel(
         buffer=buffer,
         all_listings=single_listings_df,
-        frame=frame_auctions,
-        arctos=arctos_auctions,
+        frame=borrowers_1_auctions,
+        arctos=borrowers_2_auctions,
         manual_check=single_listings_df[single_listings_df["debtor_name"] == "please check manually"])
 
     auction_params_dict = {
         "no_of_all_listings": single_listings_df.shape[0],
-        "frame_listings": frame_auctions.shape[0],
-        "frame_unique_debtors": frame_auctions["debtor_vat"].drop_duplicates().shape[0],
-        "frame_first_auction": str(pd.to_datetime(frame_auctions["date_of_conduct"], dayfirst=True).min()),
-        "arctos_listings": arctos_auctions.shape[0],
-        "arctos_unique_debtors": arctos_auctions["debtor_vat"].drop_duplicates().shape[0],
-        "arctos_first_auction": str(pd.to_datetime(arctos_auctions["date_of_conduct"], dayfirst=True).min()),
+        "frame_listings": borrowers_1_auctions.shape[0],
+        "frame_unique_debtors": borrowers_1_auctions["debtor_vat"].drop_duplicates().shape[0],
+        "frame_first_auction": str(pd.to_datetime(borrowers_1_auctions["date_of_conduct"], dayfirst=True).min()),
+        "arctos_listings": borrowers_2_auctions.shape[0],
+        "arctos_unique_debtors": borrowers_2_auctions["debtor_vat"].drop_duplicates().shape[0],
+        "arctos_first_auction": str(pd.to_datetime(borrowers_2_auctions["date_of_conduct"], dayfirst=True).min()),
         "manual_check": single_listings_df[single_listings_df["debtor_name"] == "please check manually"].shape[0]
     }
 
-    # arctos_auctions.to_excel(f"arctos_auctions_{to_date}.xlsx", index=False)
-
-    # attachment = open(f"gr_auctions_{date.today()}.xlsx", "rb").read()
-
-    # attachment_all_listings = open(f"all_listings_{to_date}.xlsx", "rb").read()
-    # attachment_arctos = open(f"arctos_auctions_{to_date}.xlsx", "rb").read()
-    # attachment_frame = open(f"frame_auctions_{to_date}.xlsx", "rb").read()
-    # attachment_manual_check = open(f"to_manual_check_{to_date}.xlsx", "rb").read()
-    # send_email(attachment)
-
-    path_to_email_list = "participants_emails.txt"
-    with open(path_to_email_list, 'r') as file:
-        # Read the entire content of the file
-        emails = file.read()
-
-    emails_list = emails.split("\n")
     for email in emails_list:
-        send_email(buffer.getvalue(), auction_params_dict=auction_params_dict,
+        send_email(buffer.getvalue(),
+                   sender_password=args.sender_password, auction_params_dict=auction_params_dict,
                    to_date=to_date, recipient_email=email)
-
-    # os.remove(f"all_listings_{to_date}.xlsx")
-    # os.remove(f"arctos_auctions_{to_date}.xlsx")
-    # os.remove(f"frame_auctions_{to_date}.xlsx")
-    # os.remove(f"to_manual_check_{to_date}.xlsx")
