@@ -23,6 +23,10 @@ from email.mime.application import MIMEApplication
 
 from sqlalchemy import create_engine
 
+from get_auctions_results import GetAuctionResults
+
+from auction_results_prepare import aucion_results
+
 
 class GrAuctionsScraper:
     def __init__(self,
@@ -39,6 +43,7 @@ class GrAuctionsScraper:
             self.max_page = int(page.find(class_="AList-GridPageCurrent").text.split("of")[1])
         else:
             self.max_page = max_page
+        print(f"No of pages: {self.max_page}")
 
     def download_page(self, page_no: int = 1) -> BeautifulSoup:
         options = webdriver.ChromeOptions()
@@ -275,9 +280,9 @@ class SingleListingParsing:
     def __call__(self, *args, **kwargs):
         t = []
 
-        no_of_listings = df.shape[0]
+        no_of_listings = self.auctions_df.shape[0]
 
-        for i, row in df.iterrows():
+        for i, row in self.auctions_df.iterrows():
 
             print(f"Scraping page {i} out of {no_of_listings}")
 
@@ -312,6 +317,75 @@ class SingleListingParsing:
         return pd.DataFrame(self.flatten_list(t))
 
 
+def send_email_multiple_borrowers(
+        attachment,
+        to_date,
+        borrowers_auctions: List[pd.DataFrame],
+        borrwers_names: List[str],
+        sender_password: str,
+        manual_check: pd.DataFrame,
+        sender_email="test.mail.data.scrp2024@gmail.com",
+        recipient_email="test@gmail.com") -> None:
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email.strip()
+    msg['Subject'] = f"GR auction data {date.today()}"
+
+    name = recipient_email.split("@")[0].split(".")
+
+    if len(name) == 1:
+        recipient = f"{name[0].capitalize()}"
+    else:
+        recipient = f"{name[0].capitalize()} {name[1].capitalize()}"
+
+    def create_auction_descrtiption(borrower: str, no_of_listings: int, unique_debtors: int, first_auction_date: str):
+        return f"""{borrower.split("_")[0]} auctions: {no_of_listings}
+                w/ {unique_debtors} unique debtors
+                and first auction is held on {first_auction_date} \n"""
+
+
+    body = f"""
+            Dear {recipient}, \n
+            please find the new listing from eauctions.gr from date: {to_date}. (in case it's weekend, it also includes listings from Friday and Saturday.) \n
+            
+            VERSION UPDATE: Holiday borrowers are included, also if new portfolio is acquired only list of borrowers is uplodaed to DB and automaticaly will be scraped \n
+            """
+
+    i = 0
+    for borrower in borrowers_auctions:
+        s = create_auction_descrtiption(
+            borrower=borrwers_names[i],
+            no_of_listings=borrower.shape[0],
+            unique_debtors=borrower["debtor_vat"].drop_duplicates().shape[0],
+            first_auction_date=str(pd.to_datetime(borrower["date_of_conduct"], dayfirst=True).min()))
+        i += 1
+
+        body += "\n" + s
+
+    body += f"""
+    Also please note that there are {manual_check.shape[0]} auctions that has to be manually checked.
+    
+    Please do not response to this mail, in case of any questions or requires please write directly to jan.pitonak@aps-holding.com
+    """
+
+    msg.attach(MIMEText(body, 'plain'))
+
+    part1 = MIMEApplication(attachment)
+    part1.add_header('Content-Disposition', 'attachment', filename=f"eauctions_gr_{to_date}.xlsx")
+    msg.attach(part1)
+
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    server = smtplib.SMTP(smtp_server, smtp_port)
+    server.starttls()
+
+    server.login(sender_email, sender_password)
+
+    server.sendmail(sender_email, recipient_email, msg.as_string())
+
+    server.quit()
+
+
 def send_email(attachment,
                to_date,
                auction_params_dict: dict,
@@ -332,10 +406,10 @@ def send_email(attachment,
 
     body = f"""
         Dear {recipient},\n
-    
-        
+
         please find the new listing from eauctions.gr from date: {to_date}. (in case it's weekend, it also includes listings from
         Friday and Saturday.)\n
+
         There were added {auction_params_dict["no_of_all_listings"]} auctions of which\n
         Frame auctions: {auction_params_dict["frame_listings"]} 
         w/ {auction_params_dict["frame_unique_debtors"]} unique debtors 
@@ -343,9 +417,59 @@ def send_email(attachment,
         Arctos auctions: {auction_params_dict["arctos_listings"]} 
         w/ {auction_params_dict["arctos_unique_debtors"]} unique debtors 
         and first auction is held on {auction_params_dict["arctos_first_auction"]}\n
-        
+
         Also please note that there are {auction_params_dict["manual_check"]} auctions that has to be manually checked.
+
+        Please do not response to this mail, in case of any questions or requires please write directly to jan.pitonak@aps-holding.com
+        """
+    msg.attach(MIMEText(body, 'plain'))
+
+    part1 = MIMEApplication(attachment)
+    part1.add_header('Content-Disposition', 'attachment', filename=f"eauctions_gr_{to_date}.xlsx")
+    msg.attach(part1)
+
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    server = smtplib.SMTP(smtp_server, smtp_port)
+    server.starttls()
+
+    server.login(sender_email, sender_password)
+
+    server.sendmail(sender_email, recipient_email, msg.as_string())
+
+    server.quit()
+
+
+def send_auction_results(
+        attachment,
+        from_date,
+        to_date,
+        sender_password: str,
+        sender_email="test.mail.data.scrp2024@gmail.com",
+        recipient_email="test@gmail.com") -> None:
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email.strip()
+    msg['Subject'] = f"GR auction results {to_date}"
+
+    name = recipient_email.split("@")[0].split(".")
+
+    if len(name) == 1:
+        recipient = f"{name[0].capitalize()}"
+    else:
+        recipient = f"{name[0].capitalize()} {name[1].capitalize()}"
+
+    body = f"""
+        Dear {recipient},\n
         
+        From 10. July 2024 every Monday an auction results from previous week will be sent to your email. File contains results of auctions for Frame and Arctos and also summary Strats for both portfolios.
+        
+        !!! PLEASE BE AWARE THAT RESULTS ARE ONLY FOR AUCTIONS POSTED FROM 12. MARCH 2024 (since we started scraping auction data) !!!
+        
+        In case you are not interested in receiving Auction results, please, let me know directly on jan.pitonak@aps-holding.com. Thank you.  
+        
+        please find the auction results from date: {from_date} to {to_date}.
+
         Please do not response to this mail, in case of any questions or requires please write directly to jan.pitonak@aps-holding.com
         """
     msg.attach(MIMEText(body, 'plain'))
@@ -398,6 +522,82 @@ def get_dates():
     else:
         from_date = today - datetime.timedelta(days=1)
     return from_date, to_date
+
+
+def get_last_week_dates(date: Optional[str] = None):
+    if date is None:
+        dt = datetime.date.today() - datetime.timedelta(days=7)
+    else:
+        dt = datetime.datetime.strptime(date, '%d/%m/%Y').date() - datetime.timedelta(days=7)
+
+    start = dt - datetime.timedelta(days=dt.weekday())
+    end = start + datetime.timedelta(days=6)
+
+    return start, end
+
+
+def upload_data(table, table_name, pswrd: str):
+    """
+    Uploads given table to MySQL database server.
+
+    table ... table to be uploaded (data frame)
+    """
+
+    connect = "mysql+pymysql://valuations:" + str(pswrd) + "@cz-cld-mysql01/valuations"
+    print(connect)
+    engine = create_engine(connect)
+    table.to_sql(table_name, con=engine, if_exists="append", index=False)
+
+
+class ExcelWriterGR:
+    def __init__(self, buffer: io.BytesIO,
+                 all_listings: pd.DataFrame,
+                 borrowers_listings: List[pd.DataFrame],
+                 manual_check: pd.DataFrame,
+                 sheet_names: List[str]):
+        self.buffer = buffer
+        self.all_listings = all_listings
+        self.borrowers_listings = borrowers_listings
+        self.manual_check = manual_check
+        self.sheet_names = sheet_names
+
+    @staticmethod
+    def write_sheet(writer: pd.ExcelWriter, df: pd.DataFrame, sheet_name: str, format):
+
+        df.to_excel(writer, sheet_name=sheet_name, startrow=1, startcol=1, index=False)
+
+        worksheet = writer.sheets[sheet_name]
+        worksheet.hide_gridlines(2)
+
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(1, col_num + 1, value, format)
+
+    def __call__(self):
+        with pd.ExcelWriter(self.buffer, mode="w", engine='xlsxwriter') as writer:
+            workbook = writer.book
+
+            workbook.formats[0].set_font_name("Arial")
+            workbook.formats[0].set_font_size(9)
+
+            header_format = workbook.add_format({
+                'bold': True,
+                'text_wrap': False,
+                'valign': 'top',
+                'fg_color': '#005864',
+                'border': 0,
+                'color': 'white',
+                'font': 'Arial',
+                'font_size': 9})
+
+            self.write_sheet(writer, self.all_listings, sheet_name="All listings", format=header_format)
+
+            i = 0
+            for borrower_listing in self.borrowers_listings:
+                self.write_sheet(writer, borrower_listing, sheet_name=self.sheet_names[i], format=header_format)
+                i += 1
+
+            self.write_sheet(writer, self.manual_check, sheet_name="To manual check", format=header_format)
+
 
 
 def write_multiple_sheet_excel(buffer: io.BytesIO,
@@ -462,6 +662,30 @@ def write_multiple_sheet_excel(buffer: io.BytesIO,
             worksheet.write(1, col_num + 1, value, header_format)
 
 
+def convert_date(d):
+    return datetime.datetime.strptime(d, '%d/%m/%Y').date()
+
+
+def create_query(table, start, end):
+    return f"""
+            SELECT *
+            FROM {table}
+            WHERE auction_date >= \'{start}\' AND auction_date <= \'{end}\'
+            """
+
+
+def get_table_from_sql_query(query, db: str, pswrd: str, username: str, server: str):
+    print("Connecting to DB...")
+
+    connect = f"mysql+pymysql://{username}:{pswrd}@{server}/{db}"
+    print(connect)
+    engine = create_engine(connect)
+
+    df = pd.read_sql(query, engine)
+
+    return df
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
@@ -479,20 +703,28 @@ if __name__ == "__main__":
 
     parser.add_argument("--sender_password", "-sp", type=str, required=True)
 
+    parser.add_argument("--auctions_table_1", "-a1", type=str, required=True)
+    parser.add_argument("--auctions_table_2", "-a2", type=str, required=True)
+
     args = parser.parse_args()
 
-
-    borrowers_1_df = get_table_from_sql_db(table_name=args.borrowers_table_1, db=args.database,
+    try:
+        borrowers_1_df = get_table_from_sql_db(table_name=args.borrowers_table_1, db=args.database,
                                            username=args.username, pswrd=args.password, server=args.server)
-
-    borrowers_2_df = get_table_from_sql_db(table_name=args.borrowers_table_2, db=args.database,
+        borrowers_2_df = get_table_from_sql_db(table_name=args.borrowers_table_2, db=args.database,
                                            username=args.username, pswrd=args.password, server=args.server)
+        mailing_list = get_table_from_sql_db(table_name=args.mailing_list, db=args.database,
+                                         username=args.username, pswrd=args.password, server=args.server)
+    except:
+        borrowers_1_df = pd.read_excel("FRAME Borrowers.xlsx")
+        borrowers_2_df = pd.read_excel("ARCTOS Borrowers.xlsx")
 
-    mailing_list = get_table_from_sql_db(table_name=args.mailing_list, db=args.database,
-                                           username=args.username, pswrd=args.password, server=args.server)
+        mailing_list = pd.read_fwf('participants_emails.txt')
 
     emails_list = mailing_list["email"].to_list()
     from_date, to_date = get_dates()
+
+    # from_date = datetime.date.today() - datetime.timedelta(days=4)
 
     print(f"from date: {from_date}\nto date: {to_date}")
     scraper = GrAuctionsScraper(from_date=from_date, to_date=to_date, max_page=args.max_page)
@@ -507,6 +739,21 @@ if __name__ == "__main__":
 
     borrowers_2_auctions = get_our_debtors(single_listings_df, borrowers_2_df, listing_vat_column="debtor_vat",
                                            debors_vat_column="VAT Number")
+
+    borrowers_1_auctions["auction_date"] = borrowers_1_auctions["auction_date"].apply(convert_date)
+    borrowers_2_auctions["auction_date"] = borrowers_2_auctions["auction_date"].apply(convert_date)
+
+    try:
+        upload_data(borrowers_1_auctions, table_name=args.auctions_table_1, pswrd=args.password)
+    except:
+        borrowers_1_auctions.to_excel(f"{args.auctions_table_1}_{to_date}.xlsx")
+        print(f"table {args.auctions_table_1} not uploaded")
+
+    try:
+        upload_data(borrowers_2_auctions, table_name=args.auctions_table_2, pswrd=args.password)
+    except:
+        borrowers_2_auctions.to_excel(f"{args.auctions_table_2}_{to_date}.xlsx")
+        print(f"table {args.auctions_table_2} not uploaded")
 
     buffer = io.BytesIO()
 
@@ -532,3 +779,38 @@ if __name__ == "__main__":
         send_email(buffer.getvalue(),
                    sender_password=args.sender_password, auction_params_dict=auction_params_dict,
                    to_date=to_date, recipient_email=email)
+
+
+    if datetime.date.today().weekday() == 0:
+        start_date, end_date = get_last_week_dates()
+
+        print(f"auctions results from date: {from_date} to {to_date}")
+
+        table_1 = get_table_from_sql_query(
+            create_query(args.auctions_table_1, start_date, end_date),
+            db=args.database, username=args.username, pswrd=args.password, server=args.server)
+
+        table_2 = get_table_from_sql_query(
+            create_query(args.auctions_table_2, start_date, end_date),
+            db=args.database, username=args.username, pswrd=args.password, server=args.server)
+
+        result_1 = GetAuctionResults(table_1)
+        result_2 = GetAuctionResults(table_2)
+
+        result_1_df = result_1()
+        result_2_df = result_2()
+
+        buffer_results = io.BytesIO()
+
+        aucion_results(buffer_results, result_1_df, result_2_df)
+
+        for email in emails_list:
+            send_auction_results(
+                buffer_results.getvalue(),
+                start_date,
+                end_date,
+                sender_password=args.sender_password,
+                recipient_email=email)
+
+
+
