@@ -44,7 +44,7 @@ if __name__ == "__main__":
     emails_list = mailing_list["email"].to_list()
     from_date, to_date = get_dates()
 
-    # from_date = datetime.date.today() - datetime.timedelta(days=4)
+    # from_date = datetime.date.today() - datetime.timedelta(days=11)
 
     print(f"from date: {from_date}\nto date: {to_date}")
     scraper = GrAuctionsScraper(from_date=from_date, to_date=to_date, max_page=args.max_page)
