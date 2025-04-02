@@ -25,7 +25,7 @@ from sqlalchemy import create_engine
 
 from get_auctions_results import GetAuctionResults
 
-from auction_results_prepare import aucion_results
+from get_auctions_results import aucion_results
 
 
 class GrAuctionsScraper:
