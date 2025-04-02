@@ -216,19 +216,20 @@ class SingleListingParsing:
         auction_descs = page.find_all(class_="AuctionDetailsDiv")
 
         for param in auction_params:
-            if param.find("label").text.strip() == "Debtors' Vat Numbers":
-                debtor_vat = list(map(lambda x: x.text.strip(), param.find_all("label", class_="ADetailsinput")))
+            name = param.find("label").text.strip()
+            if name == "Debtors' Vat Numbers":
+                debtor_vat = [label.text for label in param.find_all('label', class_='ADetailsinput') if label.text.strip()]
 
-            elif param.find("label").text.strip() == 'Debtor`s VAT Number':
-                debtor_vat = list(map(lambda x: x.text.strip(), param.find_all("label", class_="ADetailsinput")))
+            elif name == 'Debtor`s VAT Number':
+                debtor_vat = [label.text for label in param.find_all('label', class_='ADetailsinput') if label.text.strip()]
 
         for desc in auction_descs:
             name = desc.find("label").text.strip()
             if name == "Debtors' Names and Surnames":
-                debtor_name = list(map(lambda x: x.text.strip(), desc.find_all("label", class_="ADetailsinput3Cell")))
+                debtor_name = [label.text for label in desc.find_all('label', class_='ADetailsinput3Cell') if label.text.strip()]
 
             elif name == "Debtor`s Name and Surname":
-                debtor_name = list(map(lambda x: x.text.strip(), desc.find_all("label", class_="ADetailsinput3Cell")))
+                debtor_name = [label.text for label in desc.find_all('label', class_='ADetailsinput3Cell') if label.text.strip()]
 
             elif name == "Date of Conduction":
                 date_of_conduct = desc.find("label", class_="ADetailsinputDateOn").text.strip()
@@ -237,7 +238,7 @@ class SingleListingParsing:
                 unique_code = desc.find("label", class_="ADetailsinput").text.strip()
 
             elif name == "Hastener":
-                hastener_name = desc.find("label", class_="ADetailsinput3Cell").text.strip()
+                hastener_name = [label.text for label in desc.find_all('label', class_='ADetailsinput3Cell') if label.text.strip()][0]
 
         if len(debtor_name) == len(debtor_vat):
             auctions_params = []
@@ -348,7 +349,6 @@ def send_email_multiple_borrowers(
             Dear {recipient}, \n
             please find the new listing from eauctions.gr from date: {to_date}. (in case it's weekend, it also includes listings from Friday and Saturday.) \n
             
-            VERSION UPDATE: Holiday borrowers are included, also if new portfolio is acquired only list of borrowers is uplodaed to DB and automaticaly will be scraped \n
             """
 
     i = 0

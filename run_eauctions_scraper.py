@@ -44,7 +44,8 @@ if __name__ == "__main__":
     emails_list = mailing_list["email"].to_list()
     from_date, to_date = get_dates()
 
-    # from_date = datetime.date.today() - datetime.timedelta(days=4)
+    # to_date = datetime.date.today() - datetime.timedelta(days=1)
+    # from_date = datetime.date.today() - datetime.timedelta(days=5)
 
     print(f"from date: {from_date}\nto date: {to_date}")
     scraper = GrAuctionsScraper(from_date=from_date, to_date=to_date, max_page=args.max_page)
@@ -89,5 +90,7 @@ if __name__ == "__main__":
             sender_password=args.sender_password,
             manual_check=single_listings_df[single_listings_df["debtor_name"] == "please check manually"],
             recipient_email=email)
+
+
 
 
