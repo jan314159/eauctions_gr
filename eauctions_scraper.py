@@ -53,7 +53,7 @@ class GrAuctionsScraper:
 
         ua = UserAgent()
         userAgent = ua.random
-        options.add_argument('user-agent={userAgent}')
+        # options.add_argument('user-agent={userAgent}')
 
         driver = Chrome(options=options)
 
