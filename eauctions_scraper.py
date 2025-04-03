@@ -50,10 +50,12 @@ class GrAuctionsScraper:
         options.add_argument("--headless")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--incognito")
+        # options.add_argument('user-agent={userAgent}')
+        options.add_argument('user-agent=foo')
+
 
         ua = UserAgent()
         userAgent = ua.random
-        # options.add_argument('user-agent={userAgent}')
 
         driver = Chrome(options=options)
 
