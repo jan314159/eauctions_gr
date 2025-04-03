@@ -53,6 +53,8 @@ class GrAuctionsScraper:
         # options.add_argument('user-agent={userAgent}')
         options.add_argument('user-agent=foo')
 
+        print(options.arguments)
+
 
         ua = UserAgent()
         userAgent = ua.random
