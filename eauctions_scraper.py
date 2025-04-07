@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import os
+import tempfile
 import time
 from typing import Optional, List, Dict
 from datetime import date
@@ -54,7 +55,8 @@ class GrAuctionsScraper:
 
         ua = UserAgent()
         userAgent = ua.random
-        options.add_argument('user-agent={userAgent}')
+        print(userAgent)
+        options.add_argument(f'user-agent={userAgent}')
 
         driver = Chrome(options=options)
 
