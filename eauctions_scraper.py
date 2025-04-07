@@ -47,7 +47,7 @@ class GrAuctionsScraper:
 
     def download_page(self, page_no: int = 1) -> BeautifulSoup:
         # options = webdriver.ChromeOptions()
-        options = webdriver.IeOptions()
+        options = webdriver.EdgeOptions()
         options.add_argument("--headless")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--incognito")
