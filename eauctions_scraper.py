@@ -46,18 +46,18 @@ class GrAuctionsScraper:
         print(f"No of pages: {self.max_page}")
 
     def download_page(self, page_no: int = 1) -> BeautifulSoup:
-        options = webdriver.ChromeOptions()
+        # options = webdriver.ChromeOptions()
+        options = webdriver.IeOptions()
         options.add_argument("--headless")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--incognito")
         options.add_argument("--no-sandbox")
-        # options.add_argument('user-agent={userAgent}')
+        options.add_argument('user-agent={userAgent}')
 
-        custom_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        # custom_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        # options.add_argument('user-agent=custom_user_agent')
 
-        options.add_argument('user-agent=custom_user_agent')
-
-        print(options.arguments)
+        # print(options.arguments)
 
 
         ua = UserAgent()
