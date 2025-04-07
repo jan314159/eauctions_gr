@@ -58,16 +58,17 @@ class GrAuctionsScraper:
         print(userAgent)
         options.add_argument(f'user-agent={userAgent}')
 
-        driver = Chrome(options=options)
+        with tempfile.TemporaryDirectory() as tmp_profile_dir:
+            options.add_argument(f"--user-data-dir={tmp_profile_dir}")
 
-        driver.get(f"{self.url}&page={page_no}")
-        time.sleep(3)
-        print(driver.current_url)
+            driver = Chrome(options=options)
 
-        soup_page = BeautifulSoup(driver.page_source, 'html.parser')
+            driver.get(f"{self.url}&page={page_no}")
+            time.sleep(3)
+            print(driver.current_url)
 
-        # driver.close()
-        driver.quit()
+            soup_page = BeautifulSoup(driver.page_source, 'html.parser')
+            driver.quit()
 
         return soup_page
 
