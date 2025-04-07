@@ -8,7 +8,7 @@ import datetime
 import io
 
 from selenium import webdriver
-from selenium.webdriver import Chrome
+from selenium.webdriver import Chrome, Edge
 from fake_useragent import UserAgent
 
 import bs4
@@ -63,7 +63,8 @@ class GrAuctionsScraper:
         ua = UserAgent()
         userAgent = ua.random
 
-        driver = Chrome(options=options)
+        # driver = Chrome(options=options)
+        driver = Edge(options=options)
 
         driver.get(f"{self.url}&page={page_no}")
         time.sleep(3)
