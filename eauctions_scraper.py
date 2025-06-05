@@ -2,12 +2,12 @@ import argparse
 import itertools
 import os
 import re
-import tempfile
 import time
 from typing import Optional, List, Dict
 from datetime import date
 import datetime
 import io
+from tempfile import mkdtemp
 
 from selenium import webdriver
 from selenium.webdriver import Chrome
@@ -57,7 +57,7 @@ class GrAuctionsScraper:
         print(userAgent)
         options.add_argument(f'user-agent={userAgent}')
 
-        options.add_argument('user-agent={userAgent}')
+        options.add_argument(f"--user-data-dir={mkdtemp()}")
 
         driver = Chrome(options=options)
 
