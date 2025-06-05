@@ -41,7 +41,8 @@ if __name__ == "__main__":
     except:
         mailing_list = pd.read_fwf('participants_emails.txt')
 
-    emails_list = mailing_list["email"].to_list()
+    # emails_list = mailing_list["email"].to_list()
+    emails_list = ["jan.pitonak@aps-holding.com"]
     from_date, to_date = get_dates()
 
 

@@ -1,6 +1,7 @@
 import argparse
 import itertools
 import os
+import re
 import tempfile
 import time
 from typing import Optional, List, Dict
@@ -9,7 +10,7 @@ import datetime
 import io
 
 from selenium import webdriver
-from selenium.webdriver import Chrome, Edge
+from selenium.webdriver import Chrome
 from fake_useragent import UserAgent
 
 import bs4
@@ -49,8 +50,6 @@ class GrAuctionsScraper:
     def download_page(self, page_no: int = 1) -> BeautifulSoup:
         options = webdriver.ChromeOptions()
         options.add_argument("--headless")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--incognito")
         options.add_argument("--no-sandbox")
 
         ua = UserAgent()
@@ -58,17 +57,16 @@ class GrAuctionsScraper:
         print(userAgent)
         options.add_argument(f'user-agent={userAgent}')
 
-        with tempfile.TemporaryDirectory() as tmp_profile_dir:
-            options.add_argument(f"--user-data-dir={tmp_profile_dir}")
+        options.add_argument('user-agent={userAgent}')
 
-            driver = Chrome(options=options)
+        driver = Chrome(options=options)
 
-            driver.get(f"{self.url}&page={page_no}")
-            time.sleep(3)
-            print(driver.current_url)
+        driver.get(f"{self.url}&page={page_no}")
+        time.sleep(3)
+        print(driver.current_url)
 
-            soup_page = BeautifulSoup(driver.page_source, 'html.parser')
-            driver.quit()
+        soup_page = BeautifulSoup(driver.page_source, 'html.parser')
+        driver.quit()
 
         return soup_page
 
@@ -199,7 +197,7 @@ class SingleListingParsing:
 
         ua = UserAgent()
         userAgent = ua.random
-        options.add_argument('user-agent={userAgent}')
+        options.add_argument(f"user-agent={userAgent}")
 
         driver = Chrome(options=options)
 
@@ -220,29 +218,44 @@ class SingleListingParsing:
         auction_descs = page.find_all(class_="AuctionDetailsDiv")
 
         for param in auction_params:
-            name = param.find("label").text.strip()
-            if name == "Debtors' Vat Numbers":
-                debtor_vat = [label.text for label in param.find_all('label', class_='ADetailsinput') if label.text.strip()]
+            param_name = param.find("label").text.strip()
+            if param_name in ("Debtors' Vat Numbers", "Debtor`s VAT Number"):
+                debtor_vat = [x.text.strip() for x in param.find_all("label", class_=re.compile(r"(A)?Details[Ii]nput")) if x.text.strip()]
+                print("debtor_vat: ", debtor_vat)
 
-            elif name == 'Debtor`s VAT Number':
-                debtor_vat = [label.text for label in param.find_all('label', class_='ADetailsinput') if label.text.strip()]
+            if param_name == "Region":
+                region = [x.text.strip() for x in param.find_all("label", class_=re.compile(r"(A)?Details[Ii]nput")) if
+                          x.text.strip()]
+
+            if param_name == "Municipality":
+                municipality = [x.text.strip() for x in
+                                param.find_all("label", class_=re.compile(r"(A)?Details[Ii]nput")) if x.text.strip()]
 
         for desc in auction_descs:
-            name = desc.find("label").text.strip()
+            try:
+                name = desc.find("label").text.strip()
+            except AttributeError:
+                name = "n/a"
+            # print(name)
             if name == "Debtors' Names and Surnames":
                 debtor_name = [label.text for label in desc.find_all('label', class_='ADetailsinput3Cell') if label.text.strip()]
+                print("debtor_name: ", debtor_name)
 
             elif name == "Debtor`s Name and Surname":
                 debtor_name = [label.text for label in desc.find_all('label', class_='ADetailsinput3Cell') if label.text.strip()]
+                print("debtor_name: ", debtor_name)
 
             elif name == "Date of Conduction":
-                date_of_conduct = desc.find("label", class_="ADetailsinputDateOn").text.strip()
+                date_of_conduct = desc.find("label", attrs={"class": re.compile(r"(A)?Details[Ii]nputDateOn")}).text.strip()
+                print("date_of_conduct: ", date_of_conduct)
 
             elif name == "Unique Code":
-                unique_code = desc.find("label", class_="ADetailsinput").text.strip()
+                unique_code = desc.find("label", attrs={"class": re.compile(r"\b(A)?Details[Ii]nput\b")}).text.strip()
+                print("unique_code: ", unique_code)
 
             elif name == "Hastener":
-                hastener_name = [label.text for label in desc.find_all('label', class_='ADetailsinput3Cell') if label.text.strip()][0]
+                hastener_name = desc.find_all("label", class_="ADetailsinput3Cell")[0].text.strip()
+                print("hastener_name: ", hastener_name)
 
         if len(debtor_name) == len(debtor_vat):
             auctions_params = []
@@ -254,6 +267,8 @@ class SingleListingParsing:
                         "date_of_conduct": date_of_conduct,
                         "unique_code_1": unique_code,
                         "hastener_name": hastener_name,
+                        "region": region[0],
+                        "municipality": municipality[0],
                         'Status': row['Status'],
                         'starting_bid': row['starting_bid'],
                         'Debtor': row['Debtor'],
@@ -272,10 +287,13 @@ class SingleListingParsing:
                         "debtor_vat": debtor_vat[i],
                         "date_of_conduct": date_of_conduct,
                         "unique_code_1": unique_code,
-                        "hastener_name": hastener_name}
+                        "hastener_name": hastener_name,
+                        "region": region,
+                        "municipality": municipality,
+                    }
 
                 auctions_params.append(a)
-
+        print("-----------------------------------------")
         return auctions_params
 
     @staticmethod
@@ -298,13 +316,16 @@ class SingleListingParsing:
             page = self.download_page(row["link"])
             try:
                 row_params = self.get_single_page_params(page, row)
+                print("row_params: ", row_params)
             except UnboundLocalError:
                 row_params = [{
                     "debtor_name": "please check manually",
-                    "debtor_vat": "n/a",
+                    "debtor_vat": "UnboundLocalError",
                     "date_of_conduct": "n/a",
                     "unique_code_1": "n/a",
                     "hastener_name": "n/a",
+                    "region": "n/a",
+                    "municipality": "n/a",
                     'Status': row['Status'],
                     'starting_bid': row['starting_bid'],
                     'Debtor': row['Debtor'],
@@ -317,6 +338,25 @@ class SingleListingParsing:
                     'member_of_auction': row["member_of_auction"],
                     'link': row['link']
                 }]
+            # except AttributeError:
+            #     row_params = [{
+            #         "debtor_name": "please check manually",
+            #         "debtor_vat": "AttributeError",
+            #         "date_of_conduct": "n/a",
+            #         "unique_code_1": "n/a",
+            #         "hastener_name": "n/a",
+            #         'Status': row['Status'],
+            #         'starting_bid': row['starting_bid'],
+            #         'Debtor': row['Debtor'],
+            #         'auction_date': row['auction_date'],
+            #         'auction_time': row['auction_time'],
+            #         'object_to_be_auctioned': row['object_to_be_auctioned'],
+            #         'regional_unit': row['regional_unit'],
+            #         'date_of_posting': row['date_of_posting'],
+            #         'unique_code': row['unique_code'],
+            #         'member_of_auction': row["member_of_auction"],
+            #         'link': row['link']
+            #     }]
             t.append(row_params)
 
         return pd.DataFrame(self.flatten_list(t))
@@ -361,7 +401,8 @@ def send_email_multiple_borrowers(
             borrower=borrwers_names[i],
             no_of_listings=borrower.shape[0],
             unique_debtors=borrower["debtor_vat"].drop_duplicates().shape[0],
-            first_auction_date=str(pd.to_datetime(borrower["date_of_conduct"], dayfirst=True).min()))
+            first_auction_date="n/a")
+        # str(pd.to_datetime(borrower["date_of_conduct"], dayfirst=True).min())
         i += 1
 
         body += "\n" + s
@@ -413,7 +454,9 @@ def send_email(attachment,
 
         please find the new listing from eauctions.gr from date: {to_date}. (in case it's weekend, it also includes listings from
         Friday and Saturday.)\n
-
+        
+        NOTE THAT TODAY WE SAW LOT OF CORRUPTED DATA POSTED, SO PLEASE BE CAREFUL AND DOUBLE CHECK THE OUTPUTS. 
+        
         There were added {auction_params_dict["no_of_all_listings"]} auctions of which\n
         Frame auctions: {auction_params_dict["frame_listings"]} 
         w/ {auction_params_dict["frame_unique_debtors"]} unique debtors 
