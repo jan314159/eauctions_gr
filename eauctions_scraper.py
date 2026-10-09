@@ -1,17 +1,10 @@
 import argparse
-import itertools
-import os
+import atexit
 import re
-import time
 from typing import Optional, List, Dict
 from datetime import date
 import datetime
 import io
-from tempfile import mkdtemp
-
-from selenium import webdriver
-from selenium.webdriver import Chrome
-from fake_useragent import UserAgent
 
 import bs4
 from bs4 import BeautifulSoup
@@ -25,9 +18,33 @@ from email.mime.application import MIMEApplication
 
 from sqlalchemy import create_engine
 
+from browser import Browser, add_browser_args, browser_from_args
 from get_auctions_results import GetAuctionResults
 
 from get_auctions_results import aucion_results
+
+
+LISTING_COLUMNS = ['Status', 'starting_bid', 'Debtor', 'auction_date', 'auction_time', 'object_to_be_auctioned',
+                   'regional_unit', 'date_of_posting', 'unique_code', 'member_of_auction', 'link']
+
+DETAIL_COLUMNS = ['debtor_name', 'debtor_vat', 'date_of_conduct', 'unique_code_1', 'hastener_name', 'region',
+                  'municipality'] + LISTING_COLUMNS
+
+DETAIL_INPUT_CLASS = re.compile(r"(A)?Details[Ii]nput")
+
+
+def clean_text(tag: Optional[bs4.element.Tag]) -> str:
+    if tag is None:
+        return "n/a"
+    return tag.text.replace('\xa0', '').replace('\n', '').strip()
+
+
+def split_label(text: str, default_label: str) -> (str, str):
+    """'Status: Active' -> ('Status', ' Active'); text without a colon is treated as the value."""
+    label, sep, value = text.partition(":")
+    if not sep:
+        return default_label, text
+    return label.strip(), value
 
 
 class GrAuctionsScraper:
@@ -37,92 +54,56 @@ class GrAuctionsScraper:
                  url="https://www.eauction.gr/en/Home/HlektronikoiPleistiriasmoi",
                  min_page: int = 1,
                  max_page: Optional[int] = 1,
-                 asc=True):
+                 asc=True,
+                 browser: Optional[Browser] = None):
         self.url = f"{url}?postFrom={from_date.strftime('%d/%m/%Y')}&postTo={to_date.strftime('%d/%m/%Y')}&sortAsc={asc}&sortId=1&conductedSubTypeId=1"
+        self.browser = browser or Browser()
         self.min_page = min_page
+        self._pages_cache: Dict[int, BeautifulSoup] = {}
+
         if max_page is None:
-            page = self.download_page(page_no=1)
-            self.max_page = int(page.find(class_="AList-GridPageCurrent").text.split("of")[1])
+            first_page = self.download_page(page_no=1)
+            self._pages_cache[1] = first_page  # reused in __call__, no need to download it twice
+            self.max_page = self.get_number_of_pages(first_page)
         else:
             self.max_page = max_page
         print(f"No of pages: {self.max_page}")
 
+    @staticmethod
+    def get_number_of_pages(page: BeautifulSoup) -> int:
+        pager = page.find(class_="AList-GridPageCurrent")
+        if pager is None:
+            return 0  # no listings in the given date range
+        return int(pager.text.split("of")[1])
+
     def download_page(self, page_no: int = 1) -> BeautifulSoup:
-        options = webdriver.ChromeOptions()
-        options.add_argument("--headless")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--remote-debugging-port=9222")
-
-        ua = UserAgent()
-        userAgent = ua.random
-        print(userAgent)
-        options.add_argument(f'user-agent={userAgent}')
-
-        options.add_argument(f"--user-data-dir={mkdtemp()}")
-
-        driver = Chrome(options=options)
-
-        driver.get(f"{self.url}&page={page_no}")
-        time.sleep(3)
-        print(driver.current_url)
-
-        soup_page = BeautifulSoup(driver.page_source, 'html.parser')
-        driver.quit()
-
-        return soup_page
+        return self.browser.get(f"{self.url}&page={page_no}", wait_for_class="AList-BoxContainer")
 
     @staticmethod
     def feature_class_extractor(tag: bs4.element.Tag, class_: str) -> str:
-        try:
-            r = tag.find(class_=class_).text.replace('\xa0', '').replace('\n', '').strip()
-        except AttributeError:
-            r = "n/a"
-        return r
+        return clean_text(tag.find(class_=class_))
 
     @staticmethod
     def extract_auction_info(tag: bs4.element.Tag) -> (str, str):
-        try:
-            params = tag.find(class_="AList-BoxMainCell4").text.replace('\xa0', '').replace('\n', '').strip().split(
-                "Regional Unit:")
-
-            object_info = params[0].split(":")[1].strip()
-            regional_info = params[1].strip()
-        except AttributeError:
-            object_info = "n/a"
-            regional_info = "n/a"
-        except IndexError:
-            object_info = "n/a"
-            regional_info = "n/a"
-
-        return object_info, regional_info
+        params = clean_text(tag.find(class_="AList-BoxMainCell4")).split("Regional Unit:")
+        if len(params) < 2:
+            return "n/a", "n/a"
+        return split_label(params[0], "")[1].strip(), params[1].strip()
 
     @staticmethod
-    def extract_auction_posting(tag: bs4.element.Tag) -> (str, str):
-        try:
-            params = tag.find(class_="AList-BoxFooterLeft").text.replace('\xa0', '').replace('\n', '').strip().split(
-                "Unique Code:")
+    def extract_auction_posting(tag: bs4.element.Tag) -> (str, str, str):
+        params = clean_text(tag.find(class_="AList-BoxFooterLeft")).split("Unique Code:")
+        if len(params) < 2:
+            return "n/a", "n/a", "n/a"
 
-            date_of_posting = params[0].split(":")[1].strip()
-            auction_code = params[1].strip().split("Member of auction")
-            if len(auction_code) == 2:
-                unique_code = auction_code[0]
-                member_of_auction = auction_code[1]
-            else:
-                unique_code = auction_code[0]
-                member_of_auction = "n/a"
-        except AttributeError:
-            date_of_posting = "n/a"
-            unique_code = "n/a"
-            member_of_auction = "n/a"
+        date_of_posting = split_label(params[0], "")[1].strip()
+        unique_code, _, member_of_auction = params[1].strip().partition("Member of auction")
+        return date_of_posting, unique_code, member_of_auction or "n/a"
 
-        return date_of_posting, unique_code, member_of_auction
-
-    def extract_info_about_listing(self, tag: bs4.element.Tag):
-        # todo: toto tento split cathni nejaky error, ked tam nahodou nebude dvojbodka
-        status = self.feature_class_extractor(tag, class_="AList-BoxheaderLeft").split(":")
+    def extract_info_about_listing(self, tag: bs4.element.Tag) -> Dict[str, str]:
+        status = split_label(self.feature_class_extractor(tag, class_="AList-BoxheaderLeft"), "Status")
         price = self.feature_class_extractor(tag, class_="AList-BoxTextPrice")
-        debtor = self.feature_class_extractor(tag, class_="AList-BoxMainCell3").split(":")
+        debtor = split_label(self.feature_class_extractor(tag, class_="AList-BoxMainCell3"), "Debtor")
 
         auction_date = self.feature_class_extractor(tag, class_="DateIcon")
         auction_time = self.feature_class_extractor(tag, class_="TimeIcon")
@@ -130,7 +111,8 @@ class GrAuctionsScraper:
         auction_info = self.extract_auction_info(tag)
         auction_posting = self.extract_auction_posting(tag)
 
-        hyperlink = tag.find('a', class_='AList-BoxFooterMore')['href']
+        link = tag.find('a', class_='AList-BoxFooterMore')
+        hyperlink = link['href'] if link is not None else "n/a"
 
         auction_json = {
             status[0]: status[1],
@@ -144,224 +126,134 @@ class GrAuctionsScraper:
             "unique_code": auction_posting[1],
             "member_of_auction": auction_posting[2],
             "link": hyperlink
-
         }
 
         return auction_json
 
     def parse_all_listings_on_page(self, page: BeautifulSoup) -> List[Dict[str, str]]:
-        l = []
+        return [self.extract_info_about_listing(box) for box in page.find_all(class_="AList-BoxContainer")]
 
-        re_ = page.find_all(class_="AList-BoxContainer")
-
-        for re in re_:
-            l.append(self.extract_info_about_listing(re))
-
-        return l
-
-    def parse_page(self, page_no=1):
-
-        if (page_no > 1) & (page_no % 10 == 0):
-            time.sleep(60 * 2.5)
-            print(f"sleeping, scraped more than 10 euactions pages")
-
-        page = self.download_page(page_no=page_no)
-        page_l = self.parse_all_listings_on_page(page)
-
-        return page_l
-
-    @staticmethod
-    def flatten_list(nested_list):
-        return list(itertools.chain(*nested_list))
+    def parse_page(self, page_no=1) -> List[Dict[str, str]]:
+        page = self._pages_cache.pop(page_no, None) or self.download_page(page_no=page_no)
+        return self.parse_all_listings_on_page(page)
 
     def __call__(self, *args, **kwargs) -> pd.DataFrame:
-        r = list(
-            self.flatten_list(
-                list(
-                    map(self.parse_page, range(self.min_page, self.max_page + 1))
-                )
-            )
-        )
+        listings = []
+        for page_no in range(self.min_page, self.max_page + 1):
+            print(f"Scraping listing page {page_no} out of {self.max_page}")
+            listings.extend(self.parse_page(page_no))
 
-        return pd.DataFrame(r)
+        df = pd.DataFrame(listings, columns=None if listings else LISTING_COLUMNS)
+        # the same auction can show up on two pages when new listings are posted while we paginate
+        return df.drop_duplicates(subset=["link"]).reset_index(drop=True)
 
 
 class SingleListingParsing:
-    def __init__(self, auctions_df: pd.DataFrame):
+    def __init__(self, auctions_df: pd.DataFrame, browser: Optional[Browser] = None):
         self.auctions_df = auctions_df
+        self.browser = browser or Browser()
+
+    def download_page(self, url: str) -> BeautifulSoup:
+        return self.browser.get(url, wait_for_class="AuctionDetailsDiv")
 
     @staticmethod
-    def download_page(url: str) -> BeautifulSoup:
-        options = webdriver.ChromeOptions()
-        options.add_argument("--headless")
-
-        options.add_argument("--disable-blink-features=AutomationControlled")
-
-        ua = UserAgent()
-        userAgent = ua.random
-        options.add_argument(f"user-agent={userAgent}")
-
-        driver = Chrome(options=options)
-
-        driver.get(url)
-        time.sleep(3)
-        print(driver.current_url)
-
-        soup_page = BeautifulSoup(driver.page_source, 'html.parser')
-
-        driver.quit()
-        #     driver.close()
-
-        return soup_page
+    def detail_inputs(param: bs4.element.Tag) -> List[str]:
+        return [x.text.strip() for x in param.find_all("label", class_=DETAIL_INPUT_CLASS) if x.text.strip()]
 
     @staticmethod
-    def get_single_page_params(page, row=None):
-        auction_params = page.find_all(class_="AuctionDetailsDivR")
-        auction_descs = page.find_all(class_="AuctionDetailsDiv")
+    def get_single_page_params(page, row=None) -> List[Dict]:
+        """
+        Returns one dict per debtor of the auction. Raises ValueError when the page can't be parsed
+        (missing field or different number of debtor names and VAT numbers).
+        """
+        debtor_vat, debtor_name, region, municipality = None, None, None, None
+        date_of_conduct, unique_code, hastener_name = None, None, None
 
-        for param in auction_params:
-            param_name = param.find("label").text.strip()
+        for param in page.find_all(class_="AuctionDetailsDivR"):
+            label = param.find("label")
+            param_name = label.text.strip() if label is not None else "n/a"
+
             if param_name in ("Debtors' Vat Numbers", "Debtor`s VAT Number"):
-                debtor_vat = [x.text.strip() for x in param.find_all("label", class_=re.compile(r"(A)?Details[Ii]nput")) if x.text.strip()]
-                print("debtor_vat: ", debtor_vat)
+                debtor_vat = SingleListingParsing.detail_inputs(param)
+            elif param_name == "Region":
+                region = SingleListingParsing.detail_inputs(param)
+            elif param_name == "Municipality":
+                municipality = SingleListingParsing.detail_inputs(param)
 
-            if param_name == "Region":
-                region = [x.text.strip() for x in param.find_all("label", class_=re.compile(r"(A)?Details[Ii]nput")) if
-                          x.text.strip()]
+        for desc in page.find_all(class_="AuctionDetailsDiv"):
+            label = desc.find("label")
+            name = label.text.strip() if label is not None else "n/a"
 
-            if param_name == "Municipality":
-                municipality = [x.text.strip() for x in
-                                param.find_all("label", class_=re.compile(r"(A)?Details[Ii]nput")) if x.text.strip()]
-
-        for desc in auction_descs:
-            try:
-                name = desc.find("label").text.strip()
-            except AttributeError:
-                name = "n/a"
-            # print(name)
-            if name == "Debtors' Names and Surnames":
-                debtor_name = [label.text for label in desc.find_all('label', class_='ADetailsinput3Cell') if label.text.strip()]
-                print("debtor_name: ", debtor_name)
-
-            elif name == "Debtor`s Name and Surname":
-                debtor_name = [label.text for label in desc.find_all('label', class_='ADetailsinput3Cell') if label.text.strip()]
-                print("debtor_name: ", debtor_name)
-
+            if name in ("Debtors' Names and Surnames", "Debtor`s Name and Surname"):
+                debtor_name = [l.text for l in desc.find_all('label', class_='ADetailsinput3Cell') if l.text.strip()]
             elif name == "Date of Conduction":
-                date_of_conduct = desc.find("label", attrs={"class": re.compile(r"(A)?Details[Ii]nputDateOn")}).text.strip()
-                print("date_of_conduct: ", date_of_conduct)
-
+                date_of_conduct = clean_text(desc.find("label", class_=re.compile(r"(A)?Details[Ii]nputDateOn")))
             elif name == "Unique Code":
-                unique_code = desc.find("label", attrs={"class": re.compile(r"\b(A)?Details[Ii]nput\b")}).text.strip()
-                print("unique_code: ", unique_code)
-
+                unique_code = clean_text(desc.find("label", class_=re.compile(r"\b(A)?Details[Ii]nput\b")))
             elif name == "Hastener":
-                hastener_name = desc.find_all("label", class_="ADetailsinput3Cell")[0].text.strip()
-                print("hastener_name: ", hastener_name)
+                hastener = desc.find_all("label", class_="ADetailsinput3Cell")
+                hastener_name = hastener[0].text.strip() if hastener else "n/a"
 
-        if len(debtor_name) == len(debtor_vat):
-            auctions_params = []
-            for i in range(len(debtor_name)):
-                if row is not None:
-                    a = {
-                        "debtor_name": debtor_name[i],
-                        "debtor_vat": debtor_vat[i],
-                        "date_of_conduct": date_of_conduct,
-                        "unique_code_1": unique_code,
-                        "hastener_name": hastener_name,
-                        "region": region[0],
-                        "municipality": municipality[0],
-                        'Status': row['Status'],
-                        'starting_bid': row['starting_bid'],
-                        'Debtor': row['Debtor'],
-                        'auction_date': row['auction_date'],
-                        'auction_time': row['auction_time'],
-                        'object_to_be_auctioned': row['object_to_be_auctioned'],
-                        'regional_unit': row['regional_unit'],
-                        'date_of_posting': row['date_of_posting'],
-                        'unique_code': row['unique_code'],
-                        'member_of_auction': row["member_of_auction"],
-                        'link': row['link']
-                    }
-                else:
-                    a = {
-                        "debtor_name": debtor_name[i],
-                        "debtor_vat": debtor_vat[i],
-                        "date_of_conduct": date_of_conduct,
-                        "unique_code_1": unique_code,
-                        "hastener_name": hastener_name,
-                        "region": region,
-                        "municipality": municipality,
-                    }
+        fields = {"debtor_name": debtor_name, "debtor_vat": debtor_vat, "date_of_conduct": date_of_conduct,
+                  "unique_code": unique_code, "hastener_name": hastener_name, "region": region,
+                  "municipality": municipality}
+        missing = [k for k, v in fields.items() if v is None]
+        if missing:
+            raise ValueError(f"missing {', '.join(missing)}")
+        if len(debtor_name) != len(debtor_vat):
+            raise ValueError(f"{len(debtor_name)} debtor names but {len(debtor_vat)} VAT numbers")
 
-                auctions_params.append(a)
-        print("-----------------------------------------")
+        auctions_params = []
+        for name, vat in zip(debtor_name, debtor_vat):
+            a = {
+                "debtor_name": name,
+                "debtor_vat": vat,
+                "date_of_conduct": date_of_conduct,
+                "unique_code_1": unique_code,
+                "hastener_name": hastener_name,
+            }
+            if row is not None:
+                a.update({"region": region[0] if region else "n/a",
+                          "municipality": municipality[0] if municipality else "n/a",
+                          **{col: row[col] for col in LISTING_COLUMNS}})
+            else:
+                a.update({"region": region, "municipality": municipality})
+            auctions_params.append(a)
+
         return auctions_params
 
     @staticmethod
-    def flatten_list(nested_list):
-        return list(itertools.chain(*nested_list))
+    def manual_check_row(row, reason: str) -> Dict:
+        return {
+            "debtor_name": "please check manually",
+            "debtor_vat": reason,
+            "date_of_conduct": "n/a",
+            "unique_code_1": "n/a",
+            "hastener_name": "n/a",
+            "region": "n/a",
+            "municipality": "n/a",
+            **{col: row[col] for col in LISTING_COLUMNS}
+        }
 
     def __call__(self, *args, **kwargs):
         t = []
 
         no_of_listings = self.auctions_df.shape[0]
 
-        for i, row in self.auctions_df.iterrows():
+        for i, (_, row) in enumerate(self.auctions_df.iterrows(), start=1):
+            print(f"Scraping listing {i} out of {no_of_listings}")
 
-            print(f"Scraping page {i} out of {no_of_listings}")
-
-            if i % 10 == 0:
-                print("sleeping")
-                time.sleep(60 * 2.5)
-
-            page = self.download_page(row["link"])
             try:
+                page = self.download_page(row["link"])
                 row_params = self.get_single_page_params(page, row)
-                print("row_params: ", row_params)
-            except UnboundLocalError:
-                row_params = [{
-                    "debtor_name": "please check manually",
-                    "debtor_vat": "UnboundLocalError",
-                    "date_of_conduct": "n/a",
-                    "unique_code_1": "n/a",
-                    "hastener_name": "n/a",
-                    "region": "n/a",
-                    "municipality": "n/a",
-                    'Status': row['Status'],
-                    'starting_bid': row['starting_bid'],
-                    'Debtor': row['Debtor'],
-                    'auction_date': row['auction_date'],
-                    'auction_time': row['auction_time'],
-                    'object_to_be_auctioned': row['object_to_be_auctioned'],
-                    'regional_unit': row['regional_unit'],
-                    'date_of_posting': row['date_of_posting'],
-                    'unique_code': row['unique_code'],
-                    'member_of_auction': row["member_of_auction"],
-                    'link': row['link']
-                }]
-            # except AttributeError:
-            #     row_params = [{
-            #         "debtor_name": "please check manually",
-            #         "debtor_vat": "AttributeError",
-            #         "date_of_conduct": "n/a",
-            #         "unique_code_1": "n/a",
-            #         "hastener_name": "n/a",
-            #         'Status': row['Status'],
-            #         'starting_bid': row['starting_bid'],
-            #         'Debtor': row['Debtor'],
-            #         'auction_date': row['auction_date'],
-            #         'auction_time': row['auction_time'],
-            #         'object_to_be_auctioned': row['object_to_be_auctioned'],
-            #         'regional_unit': row['regional_unit'],
-            #         'date_of_posting': row['date_of_posting'],
-            #         'unique_code': row['unique_code'],
-            #         'member_of_auction': row["member_of_auction"],
-            #         'link': row['link']
-            #     }]
-            t.append(row_params)
+            except Exception as e:
+                # one broken listing must not kill the whole daily run
+                print(f"could not parse {row['link']}: {e}")
+                row_params = [self.manual_check_row(row, f"{type(e).__name__}: {e}")]
 
-        return pd.DataFrame(self.flatten_list(t))
+            t.extend(row_params)
+
+        return pd.DataFrame(t, columns=None if t else DETAIL_COLUMNS)
 
 
 def send_email_multiple_borrowers(
@@ -543,7 +435,6 @@ def get_table_from_sql_db(table_name, db: str, pswrd: str, username: str, server
     print("Connecting to DB...")
 
     connect = f"mysql+pymysql://{username}:{pswrd}@{server}/{db}"
-    print(connect)
     engine = create_engine(connect)
 
     gr_df = pd.read_sql_table(table_name=table_name, con=engine)
@@ -553,10 +444,13 @@ def get_table_from_sql_db(table_name, db: str, pswrd: str, username: str, server
 
 def get_our_debtors(listings_df: pd.DataFrame, debtos_df: pd.DataFrame, listing_vat_column: str,
                     debors_vat_column: str):
+    # work on copies, so the "All listings" sheet keeps the VAT numbers as scraped
+    debtos_df = debtos_df.copy()
     debtos_df[debors_vat_column] = pd.to_numeric(debtos_df[debors_vat_column], errors="coerce")
-    debtos_df.dropna(subset=[debors_vat_column], inplace=True)
-    debtos_df[debors_vat_column] = debtos_df[debors_vat_column].apply(int)
+    debtos_df = debtos_df.dropna(subset=[debors_vat_column])
+    debtos_df[debors_vat_column] = debtos_df[debors_vat_column].astype("int64")
 
+    listings_df = listings_df.copy()
     listings_df[listing_vat_column] = pd.to_numeric(listings_df[listing_vat_column], errors="coerce")
 
     return listings_df.merge(debtos_df, left_on=listing_vat_column, right_on=debors_vat_column)
@@ -593,7 +487,6 @@ def upload_data(table, table_name, pswrd: str):
     """
 
     connect = "mysql+pymysql://valuations:" + str(pswrd) + "@cz-cld-mysql01/valuations"
-    print(connect)
     engine = create_engine(connect)
     table.to_sql(table_name, con=engine, if_exists="append", index=False)
 
@@ -712,7 +605,10 @@ def write_multiple_sheet_excel(buffer: io.BytesIO,
 
 
 def convert_date(d):
-    return datetime.datetime.strptime(d, '%d/%m/%Y').date()
+    try:
+        return datetime.datetime.strptime(d, '%d/%m/%Y').date()
+    except (TypeError, ValueError):
+        return None
 
 
 def create_query(table, start, end):
@@ -727,7 +623,6 @@ def get_table_from_sql_query(query, db: str, pswrd: str, username: str, server: 
     print("Connecting to DB...")
 
     connect = f"mysql+pymysql://{username}:{pswrd}@{server}/{db}"
-    print(connect)
     engine = create_engine(connect)
 
     df = pd.read_sql(query, engine)
@@ -755,7 +650,12 @@ if __name__ == "__main__":
     parser.add_argument("--auctions_table_1", "-a1", type=str, required=True)
     parser.add_argument("--auctions_table_2", "-a2", type=str, required=True)
 
+    add_browser_args(parser)
+
     args = parser.parse_args()
+
+    browser = browser_from_args(args)
+    atexit.register(browser.close)
 
     try:
         borrowers_1_df = get_table_from_sql_db(table_name=args.borrowers_table_1, db=args.database,
@@ -764,7 +664,8 @@ if __name__ == "__main__":
                                            username=args.username, pswrd=args.password, server=args.server)
         mailing_list = get_table_from_sql_db(table_name=args.mailing_list, db=args.database,
                                          username=args.username, pswrd=args.password, server=args.server)
-    except:
+    except Exception as e:
+        print(f"Could not load tables from DB ({e}), using local files")
         borrowers_1_df = pd.read_excel("FRAME Borrowers.xlsx")
         borrowers_2_df = pd.read_excel("ARCTOS Borrowers.xlsx")
 
@@ -776,11 +677,11 @@ if __name__ == "__main__":
     # from_date = datetime.date.today() - datetime.timedelta(days=4)
 
     print(f"from date: {from_date}\nto date: {to_date}")
-    scraper = GrAuctionsScraper(from_date=from_date, to_date=to_date, max_page=args.max_page)
+    scraper = GrAuctionsScraper(from_date=from_date, to_date=to_date, max_page=args.max_page, browser=browser)
     df = scraper()
     print(f"no of listings: {df.shape[0]}")
 
-    single_parser = SingleListingParsing(df)
+    single_parser = SingleListingParsing(df, browser=browser)
     single_listings_df = single_parser()
 
     borrowers_1_auctions = get_our_debtors(single_listings_df, borrowers_1_df, listing_vat_column="debtor_vat",
@@ -794,13 +695,15 @@ if __name__ == "__main__":
 
     try:
         upload_data(borrowers_1_auctions, table_name=args.auctions_table_1, pswrd=args.password)
-    except:
+    except Exception as e:
+        print(e)
         borrowers_1_auctions.to_excel(f"{args.auctions_table_1}_{to_date}.xlsx")
         print(f"table {args.auctions_table_1} not uploaded")
 
     try:
         upload_data(borrowers_2_auctions, table_name=args.auctions_table_2, pswrd=args.password)
-    except:
+    except Exception as e:
+        print(e)
         borrowers_2_auctions.to_excel(f"{args.auctions_table_2}_{to_date}.xlsx")
         print(f"table {args.auctions_table_2} not uploaded")
 
@@ -833,7 +736,7 @@ if __name__ == "__main__":
     if datetime.date.today().weekday() == 0:
         start_date, end_date = get_last_week_dates()
 
-        print(f"auctions results from date: {from_date} to {to_date}")
+        print(f"auctions results from date: {start_date} to {end_date}")
 
         table_1 = get_table_from_sql_query(
             create_query(args.auctions_table_1, start_date, end_date),
@@ -843,8 +746,8 @@ if __name__ == "__main__":
             create_query(args.auctions_table_2, start_date, end_date),
             db=args.database, username=args.username, pswrd=args.password, server=args.server)
 
-        result_1 = GetAuctionResults(table_1)
-        result_2 = GetAuctionResults(table_2)
+        result_1 = GetAuctionResults(table_1, browser=browser)
+        result_2 = GetAuctionResults(table_2, browser=browser)
 
         result_1_df = result_1()
         result_2_df = result_2()
