@@ -140,7 +140,4 @@ class DownloadAllResults:
 
         for page_no in range(1, self.max_page+1):
             pass
-
-
-
-
+            
