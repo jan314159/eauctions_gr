@@ -1,22 +1,48 @@
 import io
 
 import pandas as pd
+import datetime
 from typing import Optional
 
+import bs4
 from bs4 import BeautifulSoup
+
+from selenium import webdriver
+from selenium.webdriver import Chrome
+
+from fake_useragent import UserAgent
+
+import time
 
 import numpy as np
 
-from browser import Browser
-
-
 class GetAuctionResults:
-    def __init__(self, auctions_df: pd.DataFrame, browser: Optional[Browser] = None):
+    def __init__(self, auctions_df: pd.DataFrame):
         self.df = auctions_df
-        self.browser = browser or Browser()
 
-    def download_page(self, url: str) -> BeautifulSoup:
-        return self.browser.get(url, wait_for_class="AuctionDetailsDiv")
+    @staticmethod
+    def download_page(url: str) -> BeautifulSoup:
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless")
+
+        options.add_argument("--disable-blink-features=AutomationControlled")
+
+        ua = UserAgent()
+        userAgent = ua.random
+        options.add_argument('user-agent={userAgent}')
+
+        driver = Chrome(options=options)
+
+        driver.get(url)
+        time.sleep(3)
+        print(driver.current_url)
+
+        soup_page = BeautifulSoup(driver.page_source, 'html.parser')
+
+        driver.quit()
+        #     driver.close()
+
+        return soup_page
 
     @staticmethod
     def extract_params(page):
@@ -60,12 +86,17 @@ class GetAuctionResults:
     def __call__(self, *args, **kwargs) -> pd.DataFrame:
         res = []
 
-        for _, row in self.df.iterrows():
+        for i, row in self.df.iterrows():
+
+            if i % 10 == 0:
+                print("sleeping")
+                time.sleep(60 * 2.5)
+
+            page = self.download_page(row["link"])
+
             try:
-                page = self.download_page(row["link"])
                 auctions_status = self.extract_params(page)
-            except Exception as e:
-                print(f"could not get result of {row['link']}: {e}")
+            except:
                 auctions_status = {"error": "n/a"}
 
 
@@ -78,7 +109,7 @@ class GetAuctionResults:
         if "Award ammount:" in res_df.columns:
             res_df["award"] = res_df["Award ammount:"].apply(self.convert_to_val)
         else:
-            res_df["award"] = np.nan
+            res_df["award"] = np.NaN
 
         return res_df
 
