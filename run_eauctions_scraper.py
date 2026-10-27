@@ -32,7 +32,7 @@ if __name__ == "__main__":
                 get_table_from_sql_db(table_name=borrower, db=args.database, username=args.username,
                                       pswrd=args.password, server=args.server))
     except:
-        for borrower in ["FRAME Borrowers.xlsx", "ARCTOS Borrowers.xlsx", "HOLIDAY Borrowers.xlsx"]:
+        for borrower in ["FRAME Borrowers.xlsx", "ARCTOS Borrowers.xlsx", "HOLIDAY Borrowers.xlsx", "SUNSHINE Borrowers.xlsx"]:
             borrowers.append(pd.read_excel(borrower))
 
     try:
@@ -41,13 +41,13 @@ if __name__ == "__main__":
     except:
         mailing_list = pd.read_fwf('participants_emails.txt')
 
-    # emails_list = mailing_list["email"].to_list()
-    emails_list = ["jan.pitonak@aps-holding.com"]
+    emails_list = mailing_list["email"].to_list()
+    # emails_list = ["jan.pitonak@aps-holding.com"]
     from_date, to_date = get_dates()
 
 
-    # to_date = datetime.date.today() - datetime.timedelta(days=1)
-    # from_date = datetime.date.today() - datetime.timedelta(days=5)
+    # to_date = datetime.date.today() - datetime.timedelta(days=5)
+    # from_date = datetime.date.today() - datetime.timedelta(days=4)
 
 
     print(f"from date: {from_date}\nto date: {to_date}")
