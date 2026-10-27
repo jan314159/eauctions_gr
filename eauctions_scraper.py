@@ -39,6 +39,7 @@ class GrAuctionsScraper:
                  max_page: Optional[int] = 1,
                  asc=True):
         self.url = f"{url}?postFrom={from_date.strftime('%d/%m/%Y')}&postTo={to_date.strftime('%d/%m/%Y')}&sortAsc={asc}&sortId=1&conductedSubTypeId=1"
+        # self.url = "https://www.eauction.gr/en/Home/HlektronikoiPleistiriasmoi?conductFrom=10/12/2025&conductTo=10/12/2025&sortAsc=true&sortId=1&conductedSubTypeId=1"
         self.min_page = min_page
         if max_page is None:
             page = self.download_page(page_no=1)
@@ -50,9 +51,7 @@ class GrAuctionsScraper:
     def download_page(self, page_no: int = 1) -> BeautifulSoup:
         options = webdriver.ChromeOptions()
         options.add_argument("--headless")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--remote-debugging-port=9222")
+        options.add_argument("--disable-blink-features=AutomationControlled")
 
         ua = UserAgent()
         userAgent = ua.random
@@ -84,9 +83,9 @@ class GrAuctionsScraper:
     def extract_auction_info(tag: bs4.element.Tag) -> (str, str):
         try:
             params = tag.find(class_="AList-BoxMainCell4").text.replace('\xa0', '').replace('\n', '').strip().split(
-                "Regional Unit:")
+                "Region:")
 
-            object_info = params[0].split(":")[1].strip()
+            object_info = params[0].split(":")[1].strip().replace("-", "|")
             regional_info = params[1].strip()
         except AttributeError:
             object_info = "n/a"
@@ -395,6 +394,7 @@ def send_email_multiple_borrowers(
             Dear {recipient}, \n
             please find the new listing from eauctions.gr from date: {to_date}. (in case it's weekend, it also includes listings from Friday and Saturday.) \n
             
+            Also please check, if the number of listing in period equals to number of listing on eauction website.
             """
 
     i = 0
@@ -456,7 +456,7 @@ def send_email(attachment,
 
         please find the new listing from eauctions.gr from date: {to_date}. (in case it's weekend, it also includes listings from
         Friday and Saturday.)\n
-        
+                
         NOTE THAT TODAY WE SAW LOT OF CORRUPTED DATA POSTED, SO PLEASE BE CAREFUL AND DOUBLE CHECK THE OUTPUTS. 
         
         There were added {auction_params_dict["no_of_all_listings"]} auctions of which\n
